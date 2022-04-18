@@ -5,12 +5,18 @@ Path tracking simulation with iterative linear model predictive control for spee
 author: Atsushi Sakai (@Atsushi_twi)
 
 """
+from turtle import pd
 import matplotlib.pyplot as plt
 import cvxpy
 import math
 import numpy as np
 import sys
 import os
+
+import scipy
+from scipy import interpolate
+from scipy.interpolate import splprep, splev
+
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) +
                 "/../../PathPlanning/CubicSpline/")
@@ -20,6 +26,26 @@ try:
 except:
     raise
 
+pts = np.array([
+[0.98, -0.153],
+[1.98	,-0.357],
+[2.96, -0.524],
+[3.99, -0.601],
+[4.88, -0.141],
+[5.16, 0.537 ],
+[5.16, 1.12],
+[4.55, 2.03  ],
+[3.29, 2.13],
+[2.08, 1.82],
+[0.871, 1.84],
+[-0.309, 2.11],
+[-1.43, 1.84],
+[-1.93, 0.834],
+[-1.57, 0.32],
+[-0.594, -0.0479],
+[0.363,-0.0872]
+])
+pts = pts.T
 
 NX = 4  # x = x, y, v, yaw
 NU = 2  # a = [accel, steer]
@@ -38,27 +64,30 @@ MAX_TIME = 500.0  # max simulation time
 MAX_ITER = 3  # Max iteration
 DU_TH = 0.1  # iteration finish param
 
-TARGET_SPEED = 10.0 / 3.6  # [m/s] target speed
-N_IND_SEARCH = 10  # Search index number
+TARGET_SPEED = 3.0     # [m/s] target speed
+N_IND_SEARCH = 10       # Search index number
 
-DT = 0.2  # [s] time tick
+DT = 0.1  # [s] time tick
 
 # Vehicle parameters
-LENGTH = 4.5  # [m]
-WIDTH = 2.0  # [m]
-BACKTOWHEEL = 1.0  # [m]
-WHEEL_LEN = 0.3  # [m]
-WHEEL_WIDTH = 0.2  # [m]
-TREAD = 0.7  # [m]
-WB = 2.5  # [m]
+LENGTH = 0.6  # [m]
+WIDTH = 0.3  # [m]
+BACKTOWHEEL = 0.1  # [m]
+WHEEL_LEN = 0.1  # [m]
+WHEEL_WIDTH = 0.05  # [m]
+TREAD = 0.5  # [m]
+WB =0.32  # [m]
 
-MAX_STEER = np.deg2rad(45.0)  # maximum steering angle [rad]
-MAX_DSTEER = np.deg2rad(30.0)  # maximum steering speed [rad/s]
-MAX_SPEED = 55.0 / 3.6  # maximum speed [m/s]
-MIN_SPEED = -20.0 / 3.6  # minimum speed [m/s]
-MAX_ACCEL = 1.0  # maximum accel [m/ss]
+MAX_STEER = np.deg2rad(20.0)  # maximum steering angle [rad]
+MAX_DSTEER = np.deg2rad(10.0)  # maximum steering speed [rad/s]
+MAX_SPEED = 3.0  # maximum speed [m/s]
+MIN_SPEED = 0  # minimum speed [m/s]
+MAX_ACCEL = 2.5  # maximum accel [m/ss]
 
 show_animation = True
+
+traj_file_path      =       "../../../trajectory.npy"
+traj        =       np.load(traj_file_path)
 
 
 class State:
@@ -314,7 +343,7 @@ def calc_ref_trajectory(state, cx, cy, cyaw, ck, sp, dl, pind):
     ncourse = len(cx)
 
     ind, _ = calc_nearest_index(state, cx, cy, cyaw, pind)
-
+    print(ind)
     if pind >= ind:
         ind = pind
 
@@ -352,7 +381,6 @@ def check_goal(state, goal, tind, nind):
     dx = state.x - goal[0]
     dy = state.y - goal[1]
     d = math.hypot(dx, dy)
-
     isgoal = (d <= GOAL_DIS)
 
     if abs(tind - nind) >= 5:
@@ -404,6 +432,14 @@ def do_simulation(cx, cy, cyaw, ck, sp, dl, initial_state):
     cyaw = smooth_yaw(cyaw)
 
     while MAX_TIME >= time:
+        if(target_ind > 155):
+            target_ind = 0
+
+            if state.yaw - cyaw[0] >= math.pi:
+                state.yaw -= math.pi * 2.0
+            elif state.yaw - cyaw[0] <= -math.pi:
+                state.yaw += math.pi * 2.0
+
         xref, target_ind, dref = calc_ref_trajectory(
             state, cx, cy, cyaw, ck, sp, dl, target_ind)
 
@@ -428,6 +464,7 @@ def do_simulation(cx, cy, cyaw, ck, sp, dl, initial_state):
 
         if check_goal(state, goal, target_ind, len(cx)):
             print("Goal")
+            import pdb;pdb.set_trace()
             break
 
         if show_animation:  # pragma: no cover
@@ -499,6 +536,7 @@ def smooth_yaw(yaw):
 def get_straight_course(dl):
     ax = [0.0, 5.0, 10.0, 20.0, 30.0, 40.0, 50.0]
     ay = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
     cx, cy, cyaw, ck, s = cubic_spline_planner.calc_spline_course(
         ax, ay, ds=dl)
 
@@ -517,6 +555,7 @@ def get_straight_course2(dl):
 def get_straight_course3(dl):
     ax = [0.0, -10.0, -20.0, -40.0, -50.0, -60.0, -70.0]
     ay = [0.0, -1.0, 1.0, 0.0, -1.0, 1.0, 0.0]
+
     cx, cy, cyaw, ck, s = cubic_spline_planner.calc_spline_course(
         ax, ay, ds=dl)
 
@@ -535,19 +574,35 @@ def get_forward_course(dl):
 
 
 def get_switch_back_course(dl):
-    ax = [0.0, 30.0, 6.0, 20.0, 35.0]
-    ay = [0.0, 0.0, 20.0, 35.0, 20.0]
+    # ax = [0.0, 30.0, 6.0, 20.0, 35.0]
+    # ay = [0.0, 0.0, 20.0, 35.0, 20.0]
+
+    # x,y = pts
+    # tck, u = interpolate.splprep([x, y], s=0, per=True)
+
+    # xi, yi = interpolate.splev(np.linspace(0, 1, 1000), tck)
+
+    # # xi = xi*4
+    # # yi = yi*4
+
+    # ax = xi.tolist()
+    # ay = yi.tolist()
+
+
+    ax          =       traj[:,0].tolist()
+    ay          =       traj[:,1].tolist()
+
     cx, cy, cyaw, ck, s = cubic_spline_planner.calc_spline_course(
         ax, ay, ds=dl)
-    ax = [35.0, 10.0, 0.0, 0.0]
-    ay = [20.0, 30.0, 5.0, 0.0]
-    cx2, cy2, cyaw2, ck2, s2 = cubic_spline_planner.calc_spline_course(
-        ax, ay, ds=dl)
-    cyaw2 = [i - math.pi for i in cyaw2]
-    cx.extend(cx2)
-    cy.extend(cy2)
-    cyaw.extend(cyaw2)
-    ck.extend(ck2)
+    # ax = [35.0, 10.0, 0.0, 0.0]
+    # ay = [20.0, 30.0, 5.0, 0.0]
+    # cx2, cy2, cyaw2, ck2, s2 = cubic_spline_planner.calc_spline_course(
+    #     ax, ay, ds=dl)
+    # cyaw2 = [i - math.pi for i in cyaw2]
+    # cx.extend(cx2)
+    # cy.extend(cy2)
+    # cyaw.extend(cyaw2)
+    # ck.extend(ck2)
 
     return cx, cy, cyaw, ck
 
@@ -555,14 +610,38 @@ def get_switch_back_course(dl):
 def main():
     print(__file__ + " start!!")
 
-    dl = 1.0  # course tick
-    # cx, cy, cyaw, ck = get_straight_course(dl)
-    # cx, cy, cyaw, ck = get_straight_course2(dl)
-    # cx, cy, cyaw, ck = get_straight_course3(dl)
-    # cx, cy, cyaw, ck = get_forward_course(dl)
+    dl = 0.1  # Step size
+
+    """
+    cx:     X-points -> type: [list]
+    cy:     Y-poionts -> type: [list]
+    cyaw:   yaw at every point -> type: [list]
+    ck:     curvature at every point -> type: [list]
+    """
     cx, cy, cyaw, ck = get_switch_back_course(dl)
 
+    # import pdb;pdb.set_trace()
+    """
+    sp:     Target speed for each point -> type: [list]
+    """
     sp = calc_speed_profile(cx, cy, cyaw, TARGET_SPEED)
+
+
+    cx          =       traj[:,0].tolist()
+    cy          =       traj[:,1].tolist()
+    sp          =       traj[:,2].tolist()
+    cyaw        =       (np.deg2rad(90) + traj[:,3]).tolist()
+    ck          =       traj[:,4].tolist()
+
+    # cx.append(cx[-1])
+    # cy.append(cy[-1])
+    # sp.append(-1)
+    # cyaw.append(cyaw[0])
+    # ck.append(ck[0])
+    # import pdb;pdb.set_trace()
+    
+    
+
 
     initial_state = State(x=cx[0], y=cy[0], yaw=cyaw[0], v=0.0)
 
